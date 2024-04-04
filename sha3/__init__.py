@@ -1,4 +1,4 @@
 
-from .sha3 import sha3_256
+from .sha3 import Sha3
 
-__all__ = ["sha3_256"]
+__all__ = ["Sha3"]
