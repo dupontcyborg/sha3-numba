@@ -1,4 +1,4 @@
-"""SHA3 implementation in Python"""
+"""SHA3 implementation in Python in OOP style"""
 
 import numpy as np
 
@@ -66,7 +66,7 @@ class Sha3(object):
         rate_map = {224: 144, 256: 136, 384: 104, 512: 72}
         if bit_length not in rate_map:
             raise ValueError("Invalid bit length.")
-        
+
         self.bit_length = bit_length
         rate = rate_map[bit_length]
         self.rate, self.dsbyte, self.i = rate, _DSBYTE, 0
@@ -90,7 +90,7 @@ class Sha3(object):
             self._permute()
         self._absorb(b)
         return self
-    
+
     def digest(self):
         """
         Return the hash value as bytes.
@@ -113,9 +113,9 @@ class Sha3(object):
         """
         return self.digest().hex()
 
-    def _F1600(self):
+    def _keccak_f(self):
         """
-        The F1600 permutation function.
+        The keccak_f permutation function.
 
         """
         state = self.state
@@ -209,7 +209,7 @@ class Sha3(object):
 
         """
         self.state ^= self.buf.view(dtype=np.uint64)
-        self._F1600()
+        self._keccak_f()
         self.i = 0
         self.buf[:] = 0
 
