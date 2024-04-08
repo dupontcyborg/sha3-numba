@@ -1,7 +1,7 @@
 """SHA3 implementation in Python in functional style with Numba acceleration."""
 
 import numpy as np
-from numba import cuda
+from numba import cuda, uint64, uint8
 
 _KECCAK_RC = np.array([
   0x0000000000000001, 0x0000000000008082,
@@ -32,7 +32,9 @@ def _keccak_f(state):
 
     """
 
-    bc = np.zeros(5, dtype=np.uint64)
+    bc = cuda.local.array(5, dtype=uint64)
+    for i in range(25):
+        bc[i] = 0
 
     for i in range(24):
 
@@ -191,55 +193,60 @@ def _keccak_f(state):
 @cuda.jit(device=True)
 def _absorb(state, rate, buf, buf_idx, b):
     """
-    Absorb input data into the sponge construction.
+    Absorb input data into the sponge construction in a CUDA-friendly way.
 
     Args:
-        b (bytes): The input data to be absorbed.
-
+        state: The state array of the SHA-3 sponge construction.
+        rate: The rate of the sponge function.
+        buf: The buffer to absorb the input into.
+        buf_idx: Current index in the buffer.
+        b: The input data to be absorbed, expected to be a device array.
     """
     todo = len(b)
     i = 0
     while todo > 0:
         cando = rate - buf_idx
         willabsorb = min(cando, todo)
-        buf[buf_idx:buf_idx + willabsorb] ^= \
-            np.frombuffer(b[i:i+willabsorb], dtype=np.uint8)
+        for j in range(willabsorb):
+            # Directly manipulate each byte rather than using numpy operations
+            buf[buf_idx + j] ^= b[i + j]
         buf_idx += willabsorb
         if buf_idx == rate:
-            state, buf, buf_idx = _permute(state, buf, buf_idx)
+            state, buf, buf_idx = _permute(state, buf, buf_idx)  # Ensure _permute is also device-friendly
         todo -= willabsorb
         i += willabsorb
 
     return state, buf, buf_idx
 
 @cuda.jit(device=True)
-def _squeeze(state, rate, buf, buf_idx, n):
+def _squeeze(state, bit_length, rate, buf, buf_idx, output_buf, output_idx):
     """
-    Squeeze output data from the sponge construction.
+    Directly updates output_buf in-place.
     """
-    tosqueeze = n
-    output_bytes = np.empty(tosqueeze, dtype=np.uint8)  # Temporary storage for output bytes
-    output_index = 0  # Tracks where to insert bytes into output_bytes
+
+    tosqueeze = bit_length // 8
+    local_output_idx = 0  # Tracks where to insert bytes into output_buf
 
     while tosqueeze > 0:
         cansqueeze = rate - buf_idx
         willsqueeze = min(cansqueeze, tosqueeze)
 
-        # Extract bytes from state
+        # Extract bytes from state and directly update output_buf
         for _ in range(willsqueeze):
             byte_index = buf_idx % 8
             byte_val = (state[buf_idx // 8] >> (byte_index * 8)) & 0xFF
-            output_bytes[output_index] = byte_val
+
+            output_buf[output_idx, local_output_idx] = byte_val
+
             buf_idx += 1
-            output_index += 1
+            local_output_idx += 1
 
             # If we've processed a full rate's worth of data, permute
             if buf_idx == rate:
-                state, buf, buf_idx = _permute(state, buf, 0)  # Reset buf_idx for simplicity
+                state, buf, buf_idx = _permute(state, buf, 0)
 
         tosqueeze -= willsqueeze
 
-    return output_bytes
 
 @cuda.jit(device=True)
 def _pad(state, rate, buf, buf_idx):
@@ -255,31 +262,37 @@ def _pad(state, rate, buf, buf_idx):
 def _permute(state, buf, buf_idx):
     """
     Permute the internal state and buffer for thorough mixing.
-    Uses a manual workaround since numba doesn't support np.view.
+    Uses a manual workaround since Numba doesn't support np.view.
     """
-    temp_state = np.zeros(len(state), dtype=np.uint64)
+    temp_state = cuda.local.array(25, dtype=uint64)
+    for i in range(25):
+        temp_state[i] = 0
 
     # Process bytes to uint64
     for i in range(0, len(buf), 8):
         if i + 8 <= len(buf):  # Ensure there's enough data to read
-            uint64_val = np.uint64(0)
+            uint64_val = uint64(0)
             for j in range(8):
-                uint64_val |= np.uint64(buf[i+j]) << (j * 8)
+                uint64_val |= uint64(buf[i+j]) << (j * 8)
             temp_state[i//8] = uint64_val
 
-    state ^= temp_state
+    # Manually perform bitwise XOR for each element
+    for i in range(25):
+        state[i] ^= temp_state[i]
 
     # Perform Keccak permutation
     state = _keccak_f(state)
 
     # Reset buf_idx and buf
     buf_idx = 0
-    buf[:] = 0
+    for i in range(200):
+        buf[i] = 0
 
     return state, buf, buf_idx
 
-@cuda.jit(device=True)
-def sha3(bit_length, data=b''):
+
+@cuda.jit()
+def sha3(bit_length, data_gpu, output_gpu, num_iterations=1):
     """
     Compute the SHA-3 hash of the input data.
 
@@ -291,20 +304,63 @@ def sha3(bit_length, data=b''):
         bytes (np.ndarray): A uint8 array of the hash.
 
     """
-    rate_map = {224: 144, 256: 136, 384: 104, 512: 72}
-    if bit_length not in rate_map:
-        raise ValueError('Invalid bit length.')
 
-    rate =  rate_map[bit_length]
+    idx = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
+
+    if idx < num_iterations:
+        # Implement the logic to compute hash for each thread.
+        # Each thread can call sha3 with its own data segment or modifications.
+        pass
+
+    if bit_length not in (224, 256, 384, 512):
+        raise ValueError('Invalid bit length.')
+    
+    # Compute rate
+    rate = 200 - (bit_length // 4)
+
     buf_idx = 0
-    state = np.zeros(25, dtype=np.uint64)
-    buf = np.zeros(200, dtype=np.uint8) # confirm this is correct
+
+    state = cuda.local.array(25, dtype=uint64)
+    buf = cuda.local.array(200, dtype=uint8)
+    
+    # Reset state and buf for demonstration purposes
+    for i in range(25):
+        state[i] = 0
+    for i in range(200):
+        buf[i] = 0
 
     # Absorb data
-    state, buf, buf_idx = _absorb(state, rate, buf, buf_idx, data)
+    state, buf, buf_idx = _absorb(state, rate, buf, buf_idx, data_gpu)
 
     # Pad in preparation for squeezing
     state, buf, buf_idx = _pad(state, rate, buf, buf_idx)
 
-    # Squeeze the hash
-    return _squeeze(state, rate, buf, buf_idx, bit_length // 8)
+    # Squeeze the hash based on desired bit length
+    _squeeze(state, bit_length, rate, buf, buf_idx, output_gpu, idx)
+
+def test_sha3_cuda(bit_length, data=b'', num_iterations=100):
+    """
+    Testing function for the CUDA-accelerated SHA-3 implementation.
+    """
+
+    rate_map = {224: 144, 256: 136, 384: 104, 512: 72}
+    if bit_length not in rate_map:
+        raise ValueError('Invalid bit length.')
+
+    # Define kernel execution configuration
+    threads_per_block = 128
+    blocks_per_grid = (num_iterations + threads_per_block - 1) // threads_per_block
+
+    data = np.array(list(data), dtype=np.uint8)
+
+    # Allocate memory on the device
+    data_gpu = cuda.to_device(data)
+    output_gpu = cuda.device_array((num_iterations, bit_length // 8), dtype=np.uint8)
+
+    # Launch the kernel
+    sha3[blocks_per_grid, threads_per_block](bit_length, data_gpu, output_gpu, num_iterations)
+
+    # Copy the result back to host memory
+    output = output_gpu.copy_to_host()
+
+    return output
