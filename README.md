@@ -11,7 +11,7 @@ The performance of SHA-3 implementations across Python, Numba-optimized, and nat
 The benchmarks below show that the pure Python implementation is **~3,038x** slower than native code. With Numba acceleration, this reduces to **~2.7x** slower than native, a **~1,120x** improvement.
 
 **SHA3-256 Input Length: 1000 bytes, Iterations: 1000 (M1 Max, single-thread)**
-
+```
 Pure Python:
 Time: 6.3804 s
 Hashes per second: 156.7
@@ -23,6 +23,7 @@ Hashes per second: 174,700.5
 Native (`hashlib`):
 Time: 0.0021 s
 Hashes per second: 479,003.6
+```
 
 ## Getting Started
 
