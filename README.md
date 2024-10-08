@@ -8,7 +8,7 @@ This repository implements the SHA-3 (Keccak) cryptographic hash function in Pyt
 
 The performance of SHA-3 implementations across Python, Numba-optimized, and native libraries (hashlib) shows substantial improvements when leveraging Numba’s just-in-time (JIT) compilation. 
 
-The benchmarks below show that the pure Python implementation is **~3,038x** slower than native code. With Numba acceleration, this reduces to **~2.7x** slower than native, a **~1,120x** improvement.
+The benchmarks below show that the pure Python implementation is `~3,038x` slower than native code. With Numba acceleration, this reduces to `~2.7x` slower than native, a `~1,120x` improvement.
 
 **SHA3-256 Input Length: 1000 bytes, Iterations: 1000 (M1 Max, single-thread)**
 ```
