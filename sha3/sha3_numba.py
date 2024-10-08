@@ -3,6 +3,7 @@
 import numpy as np
 from numba import njit
 
+# Keccak round constants
 _KECCAK_RC = np.array([
   0x0000000000000001, 0x0000000000008082,
   0x800000000000808a, 0x8000000080008000,
@@ -18,23 +19,42 @@ _KECCAK_RC = np.array([
   0x0000000080000001, 0x8000000080008008],
   dtype=np.uint64)
 
+# Domain separation byte
 _DSBYTE = 0x06
+
+# Number of Keccak rounds
+_NUM_ROUNDS = 24
 
 @njit
 def _rol(x, s):
-    """Rotate x left by s."""
+    """
+    Rotates x left by s
+
+    Args:
+        x (int): The input value to rotate
+        s (int): The number of bits to rotate by
+
+    Returns:
+        int: The rotated value
+    """
     return ((np.uint64(x) << np.uint64(s)) ^ (np.uint64(x) >> np.uint64(64 - s)))
 
 @njit
 def _keccak_f(state):
     """
-    The keccak_f permutation function, unrolled for performance.
+    The keccak_f permutation function, unrolled for performance
 
+    Args:
+        state (np.ndarray): The state array of the SHA-3 sponge construction
+
+    Returns:
+        np.ndarray: The permuted state array
     """
-
+    # Temporary array for calculations
     bc = np.zeros(5, dtype=np.uint64)
 
-    for i in range(24):
+    # 24 rounds of permutation
+    for i in range(_NUM_ROUNDS):
 
         # Parity calculation unrolled
         bc[0] = state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20]
@@ -189,21 +209,29 @@ def _keccak_f(state):
     return state
 
 @njit
-def _absorb(state, rate, buf, buf_idx, b):
+def _absorb(state, rate, data, buf, buf_idx):
     """
-    Absorb input data into the sponge construction.
+    Absorbs input data into the sponge construction.
 
     Args:
-        b (bytes): The input data to be absorbed.
+        state (np.ndarray): The state array of the SHA-3 sponge construction
+        rate (int): The rate of the sponge function
+        data (bytes): The input data to be absorbed
+        buf (np.ndarray): The buffer to absorb the input into
+        buf_idx (int): Current index in the buffer
 
+    Returns:
+        np.ndarray: The updated state array
+        np.ndarray: The updated buffer
+        int: The updated buffer index
     """
-    todo = len(b)
+    todo = len(data)
     i = 0
     while todo > 0:
         cando = rate - buf_idx
         willabsorb = min(cando, todo)
         buf[buf_idx:buf_idx + willabsorb] ^= \
-            np.frombuffer(b[i:i+willabsorb], dtype=np.uint8)
+            np.frombuffer(data[i:i+willabsorb], dtype=np.uint8)
         buf_idx += willabsorb
         if buf_idx == rate:
             state, buf, buf_idx = _permute(state, buf, buf_idx)
@@ -213,11 +241,21 @@ def _absorb(state, rate, buf, buf_idx, b):
     return state, buf, buf_idx
 
 @njit
-def _squeeze(state, rate, buf, buf_idx, n):
+def _squeeze(state, bit_length, rate, buf, buf_idx):
     """
-    Squeeze output data from the sponge construction.
+    Performs the squeeze operation of the sponge construction
+
+    Args:
+        state (np.ndarray): The state array of the SHA-3 sponge construction
+        bit_length (int): The desired bit length of the hash output
+        rate (int): The rate of the sponge function
+        buf (np.ndarray): The buffer to squeeze the output into
+        buf_idx (int): Current index in the buffer
+
+    Returns:
+        np.ndarray: The hash output
     """
-    tosqueeze = n
+    tosqueeze = bit_length // 8
     output_bytes = np.empty(tosqueeze, dtype=np.uint8)  # Temporary storage for output bytes
     output_index = 0  # Tracks where to insert bytes into output_bytes
 
@@ -244,8 +282,18 @@ def _squeeze(state, rate, buf, buf_idx, n):
 @njit
 def _pad(state, rate, buf, buf_idx):
     """
-    Pad the input data in the buffer.
+    Pads the input data in the buffer.
 
+    Args:
+        state (np.ndarray): The state array of the SHA-3 sponge construction
+        rate (int): The rate of the sponge function
+        buf (np.ndarray): The buffer to pad the input into
+        buf_idx (int): Current index in the buffer
+
+    Returns:
+        np.ndarray: The updated state array
+        np.ndarray: The updated buffer
+        int: The updated buffer index
     """
     buf[buf_idx] ^= _DSBYTE
     buf[rate - 1] ^= 0x80
@@ -254,8 +302,17 @@ def _pad(state, rate, buf, buf_idx):
 @njit
 def _permute(state, buf, buf_idx):
     """
-    Permute the internal state and buffer for thorough mixing.
-    Uses a manual workaround since numba doesn't support np.view.
+    Permutes the internal state and buffer for thorough mixing.
+
+    Args:
+        state (np.ndarray): The state array of the SHA-3 sponge construction
+        buf (np.ndarray): The buffer to permute
+        buf_idx (int): Current index in the buffer
+
+    Returns:
+        np.ndarray: The updated state array
+        np.ndarray: The updated buffer
+        int: The updated buffer index
     """
     temp_state = np.zeros(len(state), dtype=np.uint64)
 
@@ -281,14 +338,14 @@ def _permute(state, buf, buf_idx):
 @njit
 def sha3(bit_length, data=b''):
     """
-    Compute the SHA-3 hash of the input data.
+    Compute the SHA-3 hash of the input data
 
     Args:
-        bit_length (int): The bit length of the hash.
-        data (bytes): The input data to hash.
+        bit_length (int): The bit length of the hash
+        data (bytes): The input data to hash
 
     Returns:
-        bytes (np.ndarray): A uint8 array of the hash.
+        np.ndarray: A uint8 array of the hash
 
     """
     rate_map = {224: 144, 256: 136, 384: 104, 512: 72}
@@ -298,13 +355,13 @@ def sha3(bit_length, data=b''):
     rate =  rate_map[bit_length]
     buf_idx = 0
     state = np.zeros(25, dtype=np.uint64)
-    buf = np.zeros(200, dtype=np.uint8) # confirm this is correct
+    buf = np.zeros(200, dtype=np.uint8)
 
     # Absorb data
-    state, buf, buf_idx = _absorb(state, rate, buf, buf_idx, data)
+    state, buf, buf_idx = _absorb(state, rate, data, buf, buf_idx)
 
     # Pad in preparation for squeezing
     state, buf, buf_idx = _pad(state, rate, buf, buf_idx)
 
     # Squeeze the hash
-    return _squeeze(state, rate, buf, buf_idx, bit_length // 8)
+    return _squeeze(state, bit_length, rate, buf, buf_idx)
