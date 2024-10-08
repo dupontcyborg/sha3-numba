@@ -1,7 +1,6 @@
-"""SHA3 implementation in Python in functional style with Numba acceleration."""
+"""SHA3 implementation in Python in functional style"""
 
 import numpy as np
-from numba import njit
 
 # Keccak round constants
 _KECCAK_RC = np.array([
@@ -25,7 +24,6 @@ _DSBYTE = 0x06
 # Number of Keccak rounds
 _NUM_ROUNDS = 24
 
-@njit
 def _rol(x, s):
     """
     Rotates x left by s
@@ -39,7 +37,6 @@ def _rol(x, s):
     """
     return ((np.uint64(x) << np.uint64(s)) ^ (np.uint64(x) >> np.uint64(64 - s)))
 
-@njit
 def _keccak_f(state):
     """
     The keccak_f permutation function, unrolled for performance
@@ -208,7 +205,6 @@ def _keccak_f(state):
 
     return state
 
-@njit
 def _absorb(state, rate, data, buf, buf_idx):
     """
     Absorbs input data into the sponge construction.
@@ -240,7 +236,6 @@ def _absorb(state, rate, data, buf, buf_idx):
 
     return state, buf, buf_idx
 
-@njit
 def _squeeze(state, bit_length, rate, buf, buf_idx):
     """
     Performs the squeeze operation of the sponge construction
@@ -260,26 +255,36 @@ def _squeeze(state, bit_length, rate, buf, buf_idx):
     output_index = 0  # Tracks where to insert bytes into output_bytes
 
     while tosqueeze > 0:
+                # Calculate how many bytes can be squeezed from the current buffer
         cansqueeze = rate - buf_idx
         willsqueeze = min(cansqueeze, tosqueeze)
 
-        # Extract bytes from state
-        for _ in range(willsqueeze):
-            byte_index = buf_idx % 8
-            byte_val = (state[buf_idx // 8] >> (byte_index * 8)) & 0xFF
-            output_bytes[output_index] = byte_val
-            buf_idx += 1
-            output_index += 1
+        # Extract a block of bytes from the state (as uint8 view)
+        start_idx = buf_idx // 8  # Starting 64-bit word index
+        end_idx = (buf_idx + willsqueeze + 7) // 8  # End 64-bit word index (rounded up)
+        
+        # Get the view of the state as uint8 array and slice the appropriate section
+        state_bytes = state[start_idx:end_idx].view(np.uint8)
 
-            # If we've processed a full rate's worth of data, permute
-            if buf_idx == rate:
-                state, buf, buf_idx = _permute(state, buf, 0)  # Reset buf_idx for simplicity
+        # Determine exact byte range to copy, considering buf_idx alignment
+        byte_start = buf_idx % 8
+        byte_end = byte_start + willsqueeze
+        
+        # Copy the sliced part of state to output
+        output_bytes[output_index:output_index + willsqueeze] = state_bytes[byte_start:byte_end]
+
+        # Update the buffer index and output index
+        buf_idx += willsqueeze
+        output_index += willsqueeze
+
+        # If the buffer is fully squeezed, permute the state
+        if buf_idx == rate:
+            state, buf, buf_idx = _permute(state, buf, 0)  # Reset buf_idx after permute
 
         tosqueeze -= willsqueeze
 
     return output_bytes
 
-@njit
 def _pad(state, rate, buf, buf_idx):
     """
     Pads the input data in the buffer.
@@ -299,7 +304,6 @@ def _pad(state, rate, buf, buf_idx):
     buf[rate - 1] ^= 0x80
     return _permute(state, buf, buf_idx)
 
-@njit
 def _permute(state, buf, buf_idx):
     """
     Permutes the internal state and buffer for thorough mixing.
@@ -314,17 +318,8 @@ def _permute(state, buf, buf_idx):
         np.ndarray: The updated buffer
         int: The updated buffer index
     """
-    temp_state = np.zeros(len(state), dtype=np.uint64)
-
     # Process bytes to uint64
-    for i in range(0, len(buf), 8):
-        if i + 8 <= len(buf):  # Ensure there's enough data to read
-            uint64_val = np.uint64(0)
-            for j in range(8):
-                uint64_val |= np.uint64(buf[i+j]) << (j * 8)
-            temp_state[i//8] = uint64_val
-
-    state ^= temp_state
+    state ^= buf.view(dtype=np.uint64)
 
     # Perform Keccak permutation
     state = _keccak_f(state)
@@ -335,17 +330,16 @@ def _permute(state, buf, buf_idx):
 
     return state, buf, buf_idx
 
-@njit
 def sha3(bit_length, data=b''):
     """
-    Compute the SHA-3 hash of the input data
+    Compute the SHA-3 hash of the input data.
 
     Args:
-        bit_length (int): The bit length of the hash
-        data (bytes): The input data to hash
+        bit_length (int): The bit length of the hash.
+        data (bytes): The input data to hash.
 
     Returns:
-        np.ndarray: A uint8 array of the hash
+        bytes: The hash of the input data.
 
     """
     rate_map = {224: 144, 256: 136, 384: 104, 512: 72}
