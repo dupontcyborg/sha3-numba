@@ -3,6 +3,7 @@
 import numpy as np
 from numba import cuda, uint64, uint8
 
+# Keccak round constants
 _KECCAK_RC = np.array([
   0x0000000000000001, 0x0000000000008082,
   0x800000000000808a, 0x8000000080008000,
@@ -18,25 +19,44 @@ _KECCAK_RC = np.array([
   0x0000000080000001, 0x8000000080008008],
   dtype=np.uint64)
 
+# Domain separation byte
 _DSBYTE = 0x06
+
+# Number of Keccak rounds
+_NUM_ROUNDS = 24
 
 @cuda.jit(device=True)
 def _rol(x, s):
-    """Rotate x left by s."""
+    """
+    Rotates x left by s
+
+    Args:
+        x (int): The input value to rotate
+        s (int): The number of bits to rotate by
+
+    Returns:
+        int: The rotated value
+    """
     return ((np.uint64(x) << np.uint64(s)) ^ (np.uint64(x) >> np.uint64(64 - s)))
 
 @cuda.jit(device=True)
 def _keccak_f(state):
     """
-    The keccak_f permutation function, unrolled for performance.
+    The keccak_f permutation function, unrolled for performance
 
+    Args:
+        state (device array): The state array of the SHA-3 sponge construction
+
+    Returns:
+        device array: The updated state array after permutation
     """
-
+    # Temporary array for calculations
     bc = cuda.local.array(5, dtype=uint64)
     for i in range(25):
         bc[i] = 0
 
-    for i in range(24):
+    # 24 rounds of permutation
+    for i in range(_NUM_ROUNDS):
 
         # Parity calculation unrolled
         bc[0] = state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20]
@@ -191,18 +211,23 @@ def _keccak_f(state):
     return state
 
 @cuda.jit(device=True)
-def _absorb(state, rate, buf, buf_idx, b):
+def _absorb(state, rate, data, buf, buf_idx):
     """
-    Absorb input data into the sponge construction in a CUDA-friendly way.
+    Absorbs input data into the sponge construction
 
     Args:
-        state: The state array of the SHA-3 sponge construction.
-        rate: The rate of the sponge function.
-        buf: The buffer to absorb the input into.
-        buf_idx: Current index in the buffer.
-        b: The input data to be absorbed, expected to be a device array.
+        state (device array): The state array of the SHA-3 sponge construction
+        rate (int): The rate of the sponge function
+        data (device array): The input data to be absorbed
+        buf (device array): The buffer to absorb the input into
+        buf_idx (int): Current index in the buffer
+    
+    Returns:
+        device array: The updated state array after absorbing
+        device array: The updated buffer after absorbing
+        int: The updated index in the buffer
     """
-    todo = len(b)
+    todo = len(data)
     i = 0
     while todo > 0:
         cando = rate - buf_idx
@@ -221,12 +246,22 @@ def _absorb(state, rate, buf, buf_idx, b):
 @cuda.jit(device=True)
 def _squeeze(state, bit_length, rate, buf, buf_idx, output_buf, output_idx):
     """
-    Directly updates output_buf in-place.
+    Performs the squeeze operation of the sponge construction
+
+    Args:
+        state (device array): The state array of the SHA-3 sponge construction
+        bit_length (int): The desired bit length of the hash output
+        rate (int): The rate of the sponge function
+        buf (device array): The buffer to squeeze the output into
+        buf_idx (int): Current index in the buffer
+        output_buf (device array): The output buffer to write the hash to
+        output_idx (int): The index in the output buffer to write to
     """
 
     tosqueeze = bit_length // 8
     local_output_idx = 0  # Tracks where to insert bytes into output_buf
 
+    # Squeeze output
     while tosqueeze > 0:
         cansqueeze = rate - buf_idx
         willsqueeze = min(cansqueeze, tosqueeze)
@@ -251,8 +286,18 @@ def _squeeze(state, bit_length, rate, buf, buf_idx, output_buf, output_idx):
 @cuda.jit(device=True)
 def _pad(state, rate, buf, buf_idx):
     """
-    Pad the input data in the buffer.
+    Pads the input data in the buffer.
 
+    Args:
+        state (device array): The state array of the SHA-3 sponge construction
+        rate (int): The rate of the sponge function
+        buf (device array): The buffer to pad the input into
+        buf_idx (int): Current index in the buffer
+
+    Returns:
+        device array: The updated state array after padding
+        device array: The updated buffer after padding
+        int: The updated index in the buffer
     """
     buf[buf_idx] ^= _DSBYTE
     buf[rate - 1] ^= 0x80
@@ -261,9 +306,19 @@ def _pad(state, rate, buf, buf_idx):
 @cuda.jit(device=True)
 def _permute(state, buf, buf_idx):
     """
-    Permute the internal state and buffer for thorough mixing.
-    Uses a manual workaround since Numba doesn't support np.view.
+    Permutes the internal state and buffer for thorough mixing.
+
+    Args:
+        state (device array): The state array of the SHA-3 sponge construction
+        buf (device array): The buffer to permute
+        buf_idx (int): Current index in the buffer
+
+    Returns:
+        device array: The updated state array after permutation
+        device array: The updated buffer after permutation
+        int: The updated index in the buffer
     """
+    # Create a temporary state array
     temp_state = cuda.local.array(25, dtype=uint64)
     for i in range(25):
         temp_state[i] = 0
@@ -292,28 +347,22 @@ def _permute(state, buf, buf_idx):
 
 
 @cuda.jit()
-def sha3(bit_length, data_gpu, output_gpu, num_iterations=1):
+def sha3(bit_length, data_gpu, output_gpu, num_hashes=1):
     """
-    Compute the SHA-3 hash of the input data.
+    Computes the SHA-3 hash of the input data
 
     Args:
-        bit_length (int): The bit length of the hash.
-        data (bytes): The input data to hash.
-
-    Returns:
-        bytes (np.ndarray): A uint8 array of the hash.
-
+        bit_length (int): The bit length of the hash
+        data_gpu (device array): The input data to hash
+        output_gpu (device array): The output buffer to write the hash to
+        num_hashes (int): The number of iterations to run
     """
 
     idx = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
 
-    if idx < num_iterations:
-        # Implement the logic to compute hash for each thread.
-        # Each thread can call sha3 with its own data segment or modifications.
-        pass
-
-    if bit_length not in (224, 256, 384, 512):
-        raise ValueError('Invalid bit length.')
+    # Ensure we don't exceed the number of hashes requested
+    if idx > num_hashes:
+        return
     
     # Compute rate
     rate = 200 - (bit_length // 4)
@@ -323,14 +372,14 @@ def sha3(bit_length, data_gpu, output_gpu, num_iterations=1):
     state = cuda.local.array(25, dtype=uint64)
     buf = cuda.local.array(200, dtype=uint8)
     
-    # Reset state and buf for demonstration purposes
+    # Memsset state and buf to 0
     for i in range(25):
         state[i] = 0
     for i in range(200):
         buf[i] = 0
 
     # Absorb data
-    state, buf, buf_idx = _absorb(state, rate, buf, buf_idx, data_gpu)
+    state, buf, buf_idx = _absorb(state, rate, data_gpu, buf, buf_idx)
 
     # Pad in preparation for squeezing
     state, buf, buf_idx = _pad(state, rate, buf, buf_idx)
@@ -338,27 +387,36 @@ def sha3(bit_length, data_gpu, output_gpu, num_iterations=1):
     # Squeeze the hash based on desired bit length
     _squeeze(state, bit_length, rate, buf, buf_idx, output_gpu, idx)
 
-def test_sha3_cuda(bit_length, data=b'', num_iterations=100):
+def sha3_cuda_host(bit_length, data=b'', num_hashes=100):
     """
-    Testing function for the CUDA-accelerated SHA-3 implementation.
-    """
+    Host-side function for the CUDA-accelerated SHA-3 implementation
 
+    Args:
+        bit_length (int): The bit length of the hash
+        data (bytes): The input data to hash
+        num_hashes (int): The number of iterations to run the kernel
+
+    Returns:
+        np.ndarray: A uint8 array of the hash
+    """
+    # Validate bit length & get rate
     rate_map = {224: 144, 256: 136, 384: 104, 512: 72}
     if bit_length not in rate_map:
         raise ValueError('Invalid bit length.')
 
     # Define kernel execution configuration
     threads_per_block = 128
-    blocks_per_grid = (num_iterations + threads_per_block - 1) // threads_per_block
+    blocks_per_grid = (num_hashes + threads_per_block - 1) // threads_per_block
 
+    # Convert input data to a numpy array
     data = np.array(list(data), dtype=np.uint8)
 
     # Allocate memory on the device
     data_gpu = cuda.to_device(data)
-    output_gpu = cuda.device_array((num_iterations, bit_length // 8), dtype=np.uint8)
+    output_gpu = cuda.device_array((num_hashes, bit_length // 8), dtype=np.uint8)
 
     # Launch the kernel
-    sha3[blocks_per_grid, threads_per_block](bit_length, data_gpu, output_gpu, num_iterations)
+    sha3[blocks_per_grid, threads_per_block](bit_length, data_gpu, output_gpu, num_hashes)
 
     # Copy the result back to host memory
     output = output_gpu.copy_to_host()
