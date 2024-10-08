@@ -13,16 +13,16 @@ The benchmarks below show that the pure Python implementation is `~3,038x` slowe
 **SHA3-256 Input Length: 1000 bytes, Iterations: 1000 (M1 Max, single-thread)**
 ```
 Pure Python:
-Time: 6.3804 s
-Hashes per second: 156.7
+- Time: 6.3804 s
+- Hashes per second: 156.7
 
 Numba CPU:
-Time: 0.0057 s
-Hashes per second: 174,700.5
+- Time: 0.0057 s
+- Hashes per second: 174,700.5
 
-Native (`hashlib`):
-Time: 0.0021 s
-Hashes per second: 479,003.6
+Native (hashlib):
+- Time: 0.0021 s
+- Hashes per second: 479,003.6
 ```
 
 ## Getting Started
@@ -79,4 +79,4 @@ This notebook benchmarks SHA-3 implementations in Pure Python, Numba (CPU), and 
 
 ## License
 
-This repository is licensed under the MIT License. See the LICENSE file for more details.
+This repository is licensed under the MIT License. See the [LICENSE](./LICENSE) file for more details.
