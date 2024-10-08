@@ -234,7 +234,7 @@ def _absorb(state, rate, data, buf, buf_idx):
         willabsorb = min(cando, todo)
         for j in range(willabsorb):
             # Directly manipulate each byte rather than using numpy operations
-            buf[buf_idx + j] ^= b[i + j]
+            buf[buf_idx + j] ^= data[i + j]
         buf_idx += willabsorb
         if buf_idx == rate:
             state, buf, buf_idx = _permute(state, buf, buf_idx)  # Ensure _permute is also device-friendly
