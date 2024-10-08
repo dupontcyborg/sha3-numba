@@ -31,10 +31,13 @@ Hashes per second: 479,003.6
 
 To run this repository, you need Python 3.11 and the following Python packages:
 
-- Numpy
-- Numba
-- ipykernel (for running Jupyter notebooks, if needed)
-- CUDA (if you wish to also run SHA-3 on GPU)
+- `numpy`
+- `numba`
+- `ipykernel` (for running Jupyter notebooks, if needed)
+
+In addition, if you'd like to run SHA-3 on GPU, you will need:
+
+- `cuda-toolkit`
 
 ### Setup
 
@@ -61,9 +64,11 @@ pip install -r requirements.txt
 To use SHA-3 Numba in your Python code, you can import any of the three options below:
 
 ```
-from sha3 import sha3_python # imports pure Python implementation (slow)
-from sha3 import sha3_numba  # imports Numba accelerated CPU implementation (fast)
-from sha3 import sha3_cuda   # imports Numba accelerated GPU implementation (needs CUDA)
+from sha3 import sha3_python # Imports pure Python implementation (slow)
+
+from sha3 import sha3_numba  # Imports Numba accelerated CPU implementation (fast)
+
+from sha3 import sha3_cuda   # Imports Numba accelerated GPU implementation (needs CUDA)
 ```
 
 ### Benchmarking
