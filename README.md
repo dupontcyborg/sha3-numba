@@ -73,7 +73,7 @@ from sha3 import sha3_cuda   # Imports Numba accelerated GPU implementation (nee
 
 ### Benchmarking
 
-To benchmark the three SHA-3 implementations against native code (`hashlib`), run the `benchmark.ipynb` notebook. This notebook benchmarks SHA-3 implementations in Pure Python against Numba.
+To benchmark the three SHA-3 implementations against native code (`hashlib`), run the `test/benchmark.ipynb` notebook. This notebook benchmarks SHA-3 implementations in Pure Python against Numba.
 
 ## License
 
