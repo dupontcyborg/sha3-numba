@@ -2,7 +2,8 @@
 
 This repository implements the SHA-3 (Keccak) cryptographic hash function in Python with Numba for performance optimization, including both CPU and CUDA (GPU) support. The implementations showcase **significant** performance improvements through Numba’s just-in-time (JIT) compilation.
 
-**NOTE: This code is meant for demonstrative purposes only. As with any cryptographic code, use at your own risk.**
+> [!IMPORTANT]
+> This code is meant for demonstrative purposes only. As with any cryptographic code, use at your own risk.
 
 ## Performance
 
